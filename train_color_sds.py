@@ -222,10 +222,10 @@ def compose_lab_to_rgb_kornia(l_channel_0_1, pred_ab_channels_neg1_1):
 
 def main(args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    guidance = StableDiffusionControlNet(
-        device, False, False, args.sd_version, None, 
-        min_train_step_scaler=args.min_t_ratio, max_train_step_scaler=args.max_t_ratio,
-        controlnet_path=args.controlnet_path)
+    # guidance = StableDiffusionControlNet(
+    #     device, False, False, args.sd_version, None, 
+    #     min_train_step_scaler=args.min_t_ratio, max_train_step_scaler=args.max_t_ratio,
+    #     controlnet_path=args.controlnet_path)
     
     guidance = StableDiffusion(
         device, False, False, args.sd_version, None, 

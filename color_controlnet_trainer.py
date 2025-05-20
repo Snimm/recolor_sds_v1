@@ -48,31 +48,31 @@ def convert_to_image(torch_tensor):
 #   mult_layer = luminosity * current_layer
 #   return mult_layer * input_rgb / (luminosity + 1e-9)
 
-def compose_lab_to_rgb_kornia(l_channel_0_1, pred_ab_channels_neg1_1):
-    """
-    Composes L, A, B channels into an RGB image using kornia.
-    Args:
-        l_channel_0_1: L channel, normalized to [0, 1]. Shape (B, 1, H, W)
-        pred_ab_channels_neg1_1: Predicted A and B channels from U-Net, normalized to [-1, 1]. Shape (B, 2, H, W)
-    Returns:
-        RGB image tensor, values in [0, 1]. Shape (B, 3, H, W)
-    """
-    # Scale L from [0, 1] back to [0, 100] for Lab standard
-    l_channel_lab_standard = l_channel_0_1 * 100.0
+# def compose_lab_to_rgb_kornia(l_channel_0_1, pred_ab_channels_neg1_1):
+#     """
+#     Composes L, A, B channels into an RGB image using kornia.
+#     Args:
+#         l_channel_0_1: L channel, normalized to [0, 1]. Shape (B, 1, H, W)
+#         pred_ab_channels_neg1_1: Predicted A and B channels from U-Net, normalized to [-1, 1]. Shape (B, 2, H, W)
+#     Returns:
+#         RGB image tensor, values in [0, 1]. Shape (B, 3, H, W)
+#     """
+#     # Scale L from [0, 1] back to [0, 100] for Lab standard
+#     l_channel_lab_standard = l_channel_0_1 * 100.0
 
-    # Scale predicted A, B from U-Net's [-1, 1] (via tanh) to Lab's typical range.
-    # kornia.color.lab_to_rgb expects L in [0, 100], A, B in roughly [-100, 100] to [-128, 127].
-    # Scaling tanh output by 110 covers a good range like [-110, 110].
-    pred_a_channel_lab_standard = pred_ab_channels_neg1_1[:, 0:1, :, :] * 110.0 
-    pred_b_channel_lab_standard = pred_ab_channels_neg1_1[:, 1:2, :, :] * 110.0
+#     # Scale predicted A, B from U-Net's [-1, 1] (via tanh) to Lab's typical range.
+#     # kornia.color.lab_to_rgb expects L in [0, 100], A, B in roughly [-100, 100] to [-128, 127].
+#     # Scaling tanh output by 110 covers a good range like [-110, 110].
+#     pred_a_channel_lab_standard = pred_ab_channels_neg1_1[:, 0:1, :, :] * 110.0 
+#     pred_b_channel_lab_standard = pred_ab_channels_neg1_1[:, 1:2, :, :] * 110.0
 
-    # Concatenate to form Lab image (B, 3, H, W)
-    lab_image_tensor = torch.cat([l_channel_lab_standard, pred_a_channel_lab_standard, pred_b_channel_lab_standard], dim=1)
+#     # Concatenate to form Lab image (B, 3, H, W)
+#     lab_image_tensor = torch.cat([l_channel_lab_standard, pred_a_channel_lab_standard, pred_b_channel_lab_standard], dim=1)
 
-    # Convert Lab to RGB using kornia (differentiable). Output is RGB in [0, 1].
-    rgb_image_tensor = kornia.color.lab_to_rgb(lab_image_tensor)
+#     # Convert Lab to RGB using kornia (differentiable). Output is RGB in [0, 1].
+#     rgb_image_tensor = kornia.color.lab_to_rgb(lab_image_tensor)
     
-    return rgb_image_tensor.clamp(0., 1.) # Ensure output is strictly in [0,1]
+#     return rgb_image_tensor.clamp(0., 1.) # Ensure output is strictly in [0,1]
 
 class ColorControlNetMultiLayerTrainer(object):
     def __init__(self,
@@ -138,7 +138,7 @@ class ColorControlNetMultiLayerTrainer(object):
         self.lum_layer = torch.FloatTensor([0.3, 0.59, 0.11]).reshape([1, 3, 1, 1]).to(device)
         os.makedirs(self.eval_path, exist_ok=True)
         if composition_fn is None:
-          self.composition_fn = compose_lab_to_rgb_kornia
+            assert False, "composition_fn must be provided."
         else:
             self.composition_fn = composition_fn
 
@@ -266,10 +266,10 @@ class ColorControlNetMultiLayerTrainer(object):
         print(f"[INFO] as_latent: {as_latent} in color controlnet trainer")
         # input_latents = self.guidance.encode_imgs(data["input_pixels"])
         l_channel_input = data['l_channel_unet_input']
-        l_channel_compose = data['l_channel_for_composition']
-        control_image_cond = data['control_image_for_controlnet'] # L replicated to 3 channels        
+        # l_channel_compose = data['l_channel_for_composition']
+        # control_image_cond = data['control_image_for_controlnet'] # L replicated to 3 channels        
         pred_ab_channels = self.model(l_channel_input) # Output is tanh scaled, shape (B, 2, H, W)
-        pred_rgb = self.composition_fn(l_channel_compose, pred_ab_channels)
+        pred_rgb = self.composition_fn(l_channel_input, pred_ab_channels)
         
         loss = self.guidance.train_step(self.text_z, pred_rgb, 
                                          # This is the ControlNet condition
@@ -295,23 +295,25 @@ class ColorControlNetMultiLayerTrainer(object):
 
     def eval_step(self, data): # data is from train_dataloader in this setup
         l_channel_input = data['l_channel_unet_input']
-        l_channel_compose = data['l_channel_for_composition']
-        loss = 0
+        # l_channel_compose = data['l_channel_for_composition']
         with torch.no_grad():
             pred_ab_channels = self.model(l_channel_input)
-            res_rgb = self.composition_fn(l_channel_compose, pred_ab_channels)
+            res_rgb = self.composition_fn(l_channel_input, pred_ab_channels)
             
             # Calculate loss for eval if needed (optional, but good for tracking)
             # loss = self.guidance.train_step(self.text_embeds_map['positive'], res_rgb, 
             #                                 guidance_scale=self.cfg, as_latent=self.as_latent, grad_scale=self.grad_scale)
                 
-                
-        loss = torch.mean(torch.abs(res_rgb - data['l_channel_unet_input']), dtype=res_rgb.dtype)
-
-        
+        # find L value of res_rgb and compare with data['l_channel_unet_input']
+        res_lab = kornia.color.rgb_to_lab(res_rgb)        
+        res_l_channel = res_lab[:, 0:1, :, :] # Shape (B, 1, H, W)
+        l_diff = torch.mean(torch.abs(res_l_channel - data['l_channel_unet_input']), dtype=res_l_channel.dtype)
+        if l_diff > 0.1:
+            print(f"[WARN] L channel difference is too large: {l_diff.item()}; {l_diff}")
+            # assert False, "L channel difference is too large, check your model output!"
         # Return components for logging
         # Instead of pred_mult_layer, pred_div_layer, return pred_ab_channels
-        return pred_ab_channels, res_rgb, loss
+        return pred_ab_channels, res_rgb
 
     def test_step(self, data, bg_color=None, perturb=False):
         pred_mult_layer, pred_div_layer = self.model(data["input_pixels"])
@@ -483,7 +485,7 @@ class ColorControlNetMultiLayerTrainer(object):
         self.log(f"==> Finished Epoch {self.epoch}/{max_epochs}.")
 
     def log_eval_imgs(self, data, eval_results, step=0):
-        pred_ab_channels, composed_rgb_img_tensor, _ = eval_results # From eval_step
+        pred_ab_channels, composed_rgb_img_tensor = eval_results # From eval_step
         
         # Get first item in batch for saving
         l_input_to_save = data['l_channel_unet_input'][0].cpu().permute(1,2,0).numpy().squeeze() # (H,W)
@@ -528,7 +530,7 @@ class ColorControlNetMultiLayerTrainer(object):
                 with torch.cuda.amp.autocast(enabled=self.fp16):
                     eval_results = self.eval_step(data)
                     # print(preds.min(), preds.max(), loss)
-                    loss = eval_results[2] 
+                    
                 # all_gather/reduce the statistics (NCCL only support all_*)
                 # if self.world_size > 1:
                 #     dist.all_reduce(loss, op=dist.ReduceOp.SUM)
@@ -538,8 +540,6 @@ class ColorControlNetMultiLayerTrainer(object):
                 #     dist.all_gather(preds_list, preds)
                 #     preds = torch.cat(preds_list, dim=0)
 
-                loss_val = loss.item()
-                total_loss += loss_val
 
                 # only rank = 0 will perform evaluation.
                 if self.local_rank == 0:

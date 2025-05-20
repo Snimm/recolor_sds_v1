@@ -15,7 +15,7 @@ from torch_ema import ExponentialMovingAverage
 from skimage import color as skimage_color # For robust RGB to Lab
 from torchvision.transforms.functional import rgb_to_grayscale
 import numpy as np
-
+import kornia
 def collate_fn(examples):
     gscale_values = [example["input_pixels"] for example in examples]
     # rgb_values = [example["rgb_pixels"] for example in examples]
@@ -156,31 +156,28 @@ class ColorizationDataset(Dataset):
         image_np_rgb = np.array(pil_image) # Shape (H, W, 3), values [0, 255]
         
         # Convert RGB [0, 255] to Lab. skimage.color.rgb2lab expects float input in [0, 1].
-        img_rgb_float = image_np_rgb.astype(np.float32) / 255.0
-        img_lab = skimage_color.rgb2lab(img_rgb_float) # L: [0, 100], a,b: approx [-128, 127]
-
+        img_tensor = torch.from_numpy(image_np_rgb).float().permute(2, 0, 1) / 255.0
+        img_tensor = img_tensor.unsqueeze(0)
+        img_lab = kornia.color.rgb_to_lab(img_tensor) # L: [0, 100], a,b: approx [-128, 127]
+        l_channel = img_lab[0, 0:1, :, :]
         # L channel for U-Net input: scale L from [0, 100] to [0, 1] (common for normalized inputs)
-        self.l_channel_unet_input = img_lab[:, :, 0] / 100.0 
+        self.l_channel_unet_input_tensor = l_channel / 100.0 
         # Convert to tensor: (1, H, W)
-        self.l_channel_unet_input_tensor = transforms.ToTensor()(self.l_channel_unet_input.astype(np.float32))
-        
         # L channel for composition (will be scaled back to [0,100] before Lab->RGB conversion)
         # This is the same as l_channel_unet_input, also (1, H, W)
-        self.l_channel_for_composition_tensor = self.l_channel_unet_input_tensor.clone()
+        # self.l_channel_for_composition_tensor = self.l_channel_unet_input_tensor.clone()
 
-        # Control image for ControlNet: L channel replicated to 3 channels, normalized to [0,1]
-        # ControlNet expects a 3-channel image.
-        control_img_np = np.stack([self.l_channel_unet_input]*3, axis=-1) # (H, W, 3) with L values [0,1]
-        self.control_image_tensor = transforms.ToTensor()(control_img_np.astype(np.float32)) # (3, H, W)
+        # # Control image for ControlNet: L channel replicated to 3 channels, normalized to [0,1]
+        # # ControlNet expects a 3-channel image.
+        # control_img_np = np.stack([self.l_channel_unet_input]*3, axis=-1) # (H, W, 3) with L values [0,1]
+        # self.control_image_tensor = transforms.ToTensor()(control_img_np.astype(np.float32)) # (3, H, W)
 
     def __len__(self):
         return 1 # For single image colorization
 
     def __getitem__(self, index):
         return {
-            "l_channel_unet_input": self.l_channel_unet_input_tensor.to(self.device),    # (1, H, W)
-            "l_channel_for_composition": self.l_channel_for_composition_tensor.to(self.device), # (1, H, W)
-            "control_image_for_controlnet": self.control_image_tensor.to(self.device), # (3, H, W)
+            "l_channel_unet_input": self.l_channel_unet_input_tensor.to(self.device),    # (1, H, W)            # "control_image_for_controlnet": self.control_image_tensor.to(self.device), # (3, H, W)
         }
 
 def colorization_collate_fn(batch_list):
